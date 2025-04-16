@@ -1,31 +1,16 @@
-local select_connection = require("ipc.connection_selector").select_connection
 local message = require("resty.ipc.message")
-
-local cjson = require "cjson.safe"
-local codec = require "resty.events.codec"
-local queue = require "resty.events.queue"
-local callback = require "resty.events.callback"
-local utils = require "resty.events.utils"
+local connection = require("resty.ipc.connection")
+local connection_selector = require("resty.ipc.connection_selector")
+local utils = require("resty.ipc.utils")
 
 
-local frame_validate = require("resty.events.frame").validate
-local client = require("resty.events.protocol").client
-local is_timeout = utils.is_timeout
 local get_worker_id = utils.get_worker_id
-local get_worker_name = utils.get_worker_name
-local is_resp_recv_msg = message.is_resp_recv_msg
 local send_request = message.send_request
-
-
-local type = type
-local assert = assert
-local setmetatable = setmetatable
-local random = math.random
+local select_connection = connection_selector.select_connection
 
 
 local ngx = ngx -- luacheck: ignore
 local log = ngx.log
-local sleep = ngx.sleep
 local exiting = ngx.worker.exiting
 local ERR = ngx.ERR
 local DEBUG = ngx.DEBUG
@@ -41,43 +26,24 @@ local wait = ngx.thread.wait
 local timer_at = ngx.timer.at
 
 
-local encode = codec.encode
-local decode = codec.decode
-local cjson_encode = cjson.encode
+local assert = assert
+local pairs = pairs
+local random = math.random
 
 
-local LOCAL_WID                 = get_worker_id()
-
-local DEFAULT_REQ_TIMEOUT       = 3
-local RESP_RECV_QUEUE_POP_LIMIT = 2000
-
-
-local EMPTY_T = {}
-
-local EVENT_T = {
-    source = '',
-    event = '',
-    data = '',
-    wid = '',
-}
-
-local SPEC_T = {
-    unique = '',
-}
-
-local PAYLOAD_T = {
-    spec = EMPTY_T,
-    data = '',
-}
+local LOCAL_WID
+local DEFAULT_REQ_TIMEOUT = 3
 
 
 local _M = {}
+
 
 -- gen a random number [0.01, 0.05]
 -- it means that delay will be 10ms~50ms
 local function random_delay()
     return random(10, 50) / 1000
 end
+
 
 local check_sock_exist
 do
@@ -94,113 +60,115 @@ do
     end
 end
 
-local start_communicate_timer
-local function communicate(premature, self, addr)
+
+local start_client_hello_timer
+local function client_hello(premature, self, forwarder_id)
     if premature then
         return true
     end
 
-    local listening = self._opts.listening
-
-    if not check_sock_exist(listening) then
-        log(DEBUG, "unix domain socket (", listening, ") is not ready")
-
-        -- try to reconnect broker, avoid crit error log
-        start_communicate_timer(self, 0.002)
+    local addr = self._forwarders[forwarder_id]
+    if not addr then
+        log(ERR, "client#", LOCAL_WID, " failed to client hello to non-forwarder#", forwarder_id)
         return
     end
 
-    local broker_connection = assert(client.new())
+    if not check_sock_exist(addr) then
+        log(DEBUG, "unix domain socket (", addr, ") is not ready")
 
-    local ok, err = broker_connection:connect(listening)
+        -- try to reconnect broker, avoid crit error log
+        start_client_hello_timer(self, forwarder_id, 0.002)
+        return
+    end
 
+    local forwarder_connection, err = connection.client_hello(addr)
     if exiting() then
-        if ok then
-            broker_connection:close()
+        if forwarder_connection then
+            forwarder_connection:close()
         end
         return
     end
 
-    if not ok then
-        log(ERR, "failed to connect: ", err)
+    if not forwarder_connection then
+        log(ERR, "client#", LOCAL_WID, " failed to client hello to forwarder#", forwarder_id, ": ", err, ". addr: ", addr)
 
-        -- try to reconnect broker
-        start_communicate_timer(self, random_delay())
+        -- try to reconnect forwarder
+        start_client_hello_timer(self, forwarder_id, random_delay())
 
         return
     end
 
-    self._connected = true
+    local forwarder_id = forwarder_connection.info.id
+    local forwarder_pid = forwarder_connection.info.pid
 
-    local read_thread_co = spawn(read_thread, self, broker_connection)
-    local write_thread_co = spawn(write_thread, self, broker_connection)
+    self._conns[forwarder_id] = forwarder_connection
 
-    log(NOTICE, get_worker_name(self._worker_id),
-        " is ready to accept events from ", listening)
+    local read_thread_co = spawn(self.read_thread, self, forwarder_connection)
 
-    local ok, err, perr = wait(read_thread_co, write_thread_co)
+    log(NOTICE, "client#", LOCAL_WID, " connected to forwarder#", forwarder_id, "(pid: ", forwarder_pid,
+        ") and is ready to send/recv messages.")
 
-    self._connected = nil
+    local ok, err = wait(read_thread_co)
+
+    self._conns[forwarder_id] = nil
 
     if exiting() then
         kill(read_thread_co)
-        kill(write_thread_co)
 
-        broker_connection:close()
+        forwarder_connection:close()
 
         return
     end
 
     if not ok then
-        log(ERR, "event worker failed to communicate with broker (", err, ")")
+        log(ERR, "client#", LOCAL_WID, " disconnected with forwarder#", forwarder_id, "(pid: ", forwarder_id, "): ", err)
     end
 
-    if perr then
-        log(ERR, "event worker failed to communicate with broker (", perr, ")")
-    end
+    forwarder_connection:close()
 
-    wait(read_thread_co)
-    wait(write_thread_co)
-
-    broker_connection:close()
-
-    start_communicate_timer(self, addr, random_delay())
+    start_client_hello_timer(self, forwarder_id, random_delay())
 
     return true
 end
 
-local function start_communicate_timer(self, addr, delay)
+
+function start_client_hello_timer(self, wid, delay)
     if exiting() then
         return
     end
-    assert(timer_at(delay, communicate, self, addr))
+    assert(timer_at(delay, client_hello, self, wid))
 end
 
-
-local function start_communicate_timers(self)
+local function start_client_hello_timers(self)
     local forwarders = self._forwarders
     local is_forwader = forwarders[LOCAL_WID] and true or false
-    for wid, addr in ipairs(forwarders) do
-        if not is_forwader or wid < LOCAL_WID then
-            start_communicate_timer(self, addr, 0)
+    for wid in pairs(forwarders) do
+        if (not is_forwader and wid ~= LOCAL_WID) or wid < LOCAL_WID then
+            start_client_hello_timer(self, wid, 0)
         end
     end
 end
+
+
 local function start_timers(self)
-    start_communicate_timers(self)
+    start_client_hello_timers(self)
 end
 
 
-function _M.init(self, opts)
+function _M.init(self)
+    self._waiting_responses = {}
+    self._received_responses = {}
     return true
 end
 
 function _M.init_worker(self)
+    LOCAL_WID = get_worker_id()
     start_timers(self)
     return true
 end
 
 function _M.request(self, payload, dst_wid, opts)
+    local opts = opts or {}
     local timout = opts.timeout or DEFAULT_REQ_TIMEOUT
 
     local connection, err = select_connection(self, dst_wid)

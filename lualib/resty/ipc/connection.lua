@@ -1,6 +1,6 @@
-local codec = require("ipc.codec")
-local frame = require("ipc.frame")
-local utils = require("ipc.utils")
+local codec = require("resty.ipc.codec")
+local frame = require("resty.ipc.frame")
+local utils = require("resty.ipc.utils")
 
 
 local encode = codec.encode
@@ -14,7 +14,6 @@ local worker_pid = ngx.worker.pid
 local tcp = ngx.socket.tcp
 local req_sock = ngx.req.socket
 local ngx_header = ngx.header
-local ngx_headers_sent = ngx.headers_sent
 local ngx_send_headers = ngx.send_headers
 local ngx_flush = ngx.flush
 local subsystem = ngx.config.subsystem -- todo: what
@@ -28,10 +27,6 @@ local setmetatable = setmetatable
 
 -- for high traffic pressure
 local DEFAULT_TIMEOUT = 5000 -- 5000ms
-local HELLO_INFO = {
-    id = get_worker_id(),
-    pid = worker_pid(),
-}
 
 
 local _M = {}
@@ -80,7 +75,12 @@ function _M.client_hello(addr)
         end
     end -- subsystem == "http"
 
-    local _, err = send_frame(sock, encode(HELLO_INFO))
+    local info = {
+        id = get_worker_id(),
+        pid = worker_pid(),
+    }
+
+    local _, err = send_frame(sock, encode(info))
     if err then
         return nil, "failed to send client hello info: " .. err
     end
@@ -103,9 +103,9 @@ function _M.client_hello(addr)
     return setmetatable(self, _MT)
 end
 
-function _M.server_hello()
+function _M.forwarder_hello()
     if subsystem == "http" then
-        if ngx_headers_sent then
+        if ngx.headers_sent then
             return nil, "response header already sent"
         end
 
@@ -141,7 +141,12 @@ function _M.server_hello()
         return nil, "invalid client hello info received: " .. err
     end
 
-    local _, err = send_frame(sock, encode(HELLO_INFO))
+    local info = {
+        id = get_worker_id(),
+        pid = worker_pid(),
+    }
+
+    local _, err = send_frame(sock, encode(info))
     if err then
         return nil, "failed to server hello info: " .. err
     end
@@ -160,6 +165,10 @@ end
 
 function _M.recv_frame(self)
     return recv_frame(self.sock)
+end
+
+function _M.close(self)
+    return self.sock:close()
 end
 
 return _M

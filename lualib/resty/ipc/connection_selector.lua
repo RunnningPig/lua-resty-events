@@ -1,4 +1,3 @@
-local assert
 local random = math.random
 
 
@@ -13,7 +12,7 @@ function _M.select_connection(self, dst)
     end
 
     local forwarders = {}
-    for wid in ipairs(connections) do
+    for wid in pairs(connections) do
         if wid > dst then
             break
         end
@@ -22,7 +21,7 @@ function _M.select_connection(self, dst)
 
     local count = #forwarders
     if count == 0 then
-        return nil, "dest is unreachable"
+        return nil, "dest unreachable"
     end
 
     local forwarder = forwarders[count == 1 and 1 or random(count)]

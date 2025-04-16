@@ -2,15 +2,12 @@ local json = require("cjson.safe")
 local client = require("resty.ipc.client")
 local server = require("resty.ipc.server")
 local forwarder = require("resty.ipc.forwarder")
-local connection = require("resty.ipc.connection")
-local queue = require("resty.ipc.queue")
 local utils = require("resty.ipc.utils")
 local message = require("resty.ipc.message")
 
 local disable_listening = require("resty.ipc.disable_listening")
-local is_timeout = utils.is_timeout
-local is_closed = utils.is_closed
 local get_worker_id = utils.get_worker_id
+local is_timeout = utils.is_timeout
 local get_worker_name = utils.get_worker_name
 local is_forward_msg = message.is_forward
 local is_req_recv_msg = message.is_req_recv
@@ -21,63 +18,24 @@ local type = type
 local assert = assert
 local setmetatable = setmetatable
 local pairs = pairs
-local random = math.random
 
 
 local ngx = ngx -- luacheck: ignore
 local log = ngx.log
-local exit = ngx.exit
-local sleep = ngx.sleep
 local exiting = ngx.worker.exiting
 local ERR = ngx.ERR
-local DEBUG = ngx.DEBUG
-local NOTICE = ngx.NOTICE
-
-
-local spawn = ngx.thread.spawn
-local kill = ngx.thread.kill
-local wait = ngx.thread.wait
-
-
-local timer_at = ngx.timer.at
 
 
 local json_encode = json.encode
 
 
-local LOCAL_WID          = utils.get_worker_id()
-local EVENTS_COUNT_LIMIT = 100
-local EVENTS_POP_LIMIT   = 2000
-local EVENTS_SLEEP_TIME  = 0.05
-
-local REQ_MGS            = 1
-local RESP_MGS           = 2
-
-local EMPTY_T            = {}
-
-local EVENT_T            = {
-    source = '',
-    event = '',
-    data = '',
-    wid = '',
-}
-
-local SPEC_T             = {
-    unique = '',
-}
-
-local PAYLOAD_T          = {
-    spec = EMPTY_T,
-    data = '',
-}
+local LOCAL_WID
 
 
 local _M = {}
 local _MT = { __index = _M }
 
 function _M.read_thread(self, connection)
-    local req_recv_queue = self._req_recv_queue
-    local resp_recv_queue = self._resp_recv_queue
     local worker_id = connection.info.id
     while not exiting() do
         local msg, err = connection:recv_frame()
@@ -125,7 +83,7 @@ function _M.read_thread(self, connection)
     return true
 end
 
-function _M.new(forwarders, opts)
+function _M.new(forwarders)
     assert(type(forwarders) == "table", "expected a table, but got " .. type(forwarders))
     local self = {
         _forwarders = forwarders,
@@ -137,9 +95,10 @@ function _M.new(forwarders, opts)
 end
 
 function _M.init_worker(self)
-    local listenings = self._listenings
+    LOCAL_WID = get_worker_id()
 
-    for wid, addr in pairs(listenings) do
+    local _forwarders = self._forwarders
+    for wid, addr in pairs(_forwarders) do
         if wid ~= LOCAL_WID then
             local ok, err = disable_listening(addr)
             if not ok then
@@ -147,14 +106,20 @@ function _M.init_worker(self)
             end
         end
     end
+
+    client.init_worker(self)
+    forwarder.init_worker(self)
+    server.init_worker(self)
+
+    return true
 end
 
 function _M.request(self, data, dst)
     return client.request(self, data, dst)
 end
 
-function _M.serve(self, callback)
-    return server.serve(self, callback)
+function _M.serve(self, callback, opts)
+    return server.serve(self, callback, opts)
 end
 
 function _M.forwarder_hello(self)

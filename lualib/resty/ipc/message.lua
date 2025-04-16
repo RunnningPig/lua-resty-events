@@ -4,9 +4,6 @@ local get_worker_id = require("resty.ipc.utils").get_worker_id
 local setmetatable = setmetatable
 
 
-local LOCAL_WID = get_worker_id()
-
-local RAW_MSG = 0
 local REQ_MSG = 1
 local RESP_MSG = 2
 
@@ -19,21 +16,21 @@ local _M = {}
 
 
 function _M.is_req_recv(msg)
-    return msg.dst == LOCAL_WID and msg.type == REQ_MSG, msg.data
+    return msg.dst == get_worker_id() and msg.type == REQ_MSG, msg.data
 end
 
 function _M.is_resp_recv(msg)
-    return msg.dst == LOCAL_WID and msg.type == RESP_MSG, msg.data
+    return msg.dst == get_worker_id() and msg.type == RESP_MSG, msg.data
 end
 
 function _M.is_forward(msg)
-    return msg.dst ~= LOCAL_WID, msg.dst
+    return msg.dst ~= get_worker_id(), msg.dst
 end
 
 function _M.send(conn, payload, dst)
     local msg = MSG_DATA
-    msg.type = RAW_MSG
-    msg.src = LOCAL_WID
+    msg.type = REQ_MSG
+    msg.src = get_worker_id()
     msg.dst = dst
     msg.data = payload
 
@@ -50,7 +47,7 @@ end
 function _M.send_request(conn, payload, dst)
     local msg = MSG_DATA
     msg.type = REQ_MSG
-    msg.src = LOCAL_WID
+    msg.src = get_worker_id()
     msg.dst = dst
     msg.data = payload
     msg.seq = REQ_SEQ
@@ -68,7 +65,7 @@ end
 function _M.send_response(conn, payload, req_seq, dst)
     local msg = MSG_DATA
     msg.type = RESP_MSG
-    msg.src = LOCAL_WID
+    msg.src = get_worker_id()
     msg.dst = dst
     msg.data = payload
     msg.seq = req_seq

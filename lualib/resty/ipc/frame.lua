@@ -1,4 +1,4 @@
-local codec = require("ipc.codec")
+local codec = require("resty.ipc.codec")
 
 local bit = require("bit")
 
