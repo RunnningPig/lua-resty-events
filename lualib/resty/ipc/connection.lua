@@ -75,12 +75,12 @@ function _M.client_hello(addr)
         end
     end -- subsystem == "http"
 
-    local info = {
+    local client_info = {
         id = get_worker_id(),
         pid = worker_pid(),
     }
 
-    local _, err = send_frame(sock, encode(info))
+    local _, err = send_frame(sock, encode(client_info))
     if err then
         return nil, "failed to send client hello info: " .. err
     end
@@ -90,13 +90,13 @@ function _M.client_hello(addr)
         return nil, "failed to recv server hello info: " .. err
     end
 
-    local info, err = decode(data)
+    local forwarder_info, err = decode(data)
     if err then
         return nil, "invalid server hello info received: " .. err
     end
 
     local self = {
-        info = info,
+        info = forwarder_info,
         sock = sock,
     }
 
@@ -136,23 +136,23 @@ function _M.forwarder_hello()
         return nil, "failed to read worker info: " .. err
     end
 
-    local info, err = decode(data)
+    local client_info, err = decode(data)
     if err then
         return nil, "invalid client hello info received: " .. err
     end
 
-    local info = {
+    local forwarder_info = {
         id = get_worker_id(),
         pid = worker_pid(),
     }
 
-    local _, err = send_frame(sock, encode(info))
+    local _, err = send_frame(sock, encode(forwarder_info))
     if err then
         return nil, "failed to server hello info: " .. err
     end
 
     local self = {
-        info = info,
+        info = client_info,
         sock = sock,
     }
 

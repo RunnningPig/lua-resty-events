@@ -49,7 +49,7 @@ function _M.forwarder_hello(self)
     local client_is_forwader = self._forwarders[client_id] and true or false
 
     if client_is_forwader and client_id <= LOCAL_WID then
-        log(ERR, "client#", client_id, " connection rejected on forwarder#", LOCAL_WID,
+        log(ERR, "client#", client_id, "(pid: ", client_pid, ") connection rejected on forwarder#", LOCAL_WID,
             ": client id less than forwarder id")
         return exit(ngx.ERR)
     end
