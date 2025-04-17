@@ -88,8 +88,7 @@ function _M.read_thread(self, connection)
     return true
 end
 
-function _M.req_send_thread(self, connection)
-    local req_send_queue = self._req_send_queues[connection.info.id]
+function _M.req_send_thread(self, connection, req_send_queue)
     while not exiting() do
         local entity, err = req_send_queue:pop()
         if err then
@@ -103,16 +102,6 @@ function _M.req_send_thread(self, connection)
         end
 
         local req, dst, sem = entity[1], entity[2], entity[3]
-
-        local connection, err = select_connection(self, dst)
-        if not connection then
-            if not exiting() and self._waiting_requests[sem] then
-                self._sent_requests[sem] = { nil, "failed to select connection to send request: " .. err }
-                sem:post()
-            end
-            goto continue
-        end
-
         local req_id, err = send_request(connection, req, dst)
         if not req_id then
             if not exiting() and self._waiting_requests[sem] then

@@ -16,11 +16,11 @@ local _M = {}
 
 
 function _M.is_req_recv(msg)
-    return msg.dst == get_worker_id() and msg.type == REQ_MSG, msg.data
+    return msg.dst == get_worker_id() and msg.type == REQ_MSG, msg.data, msg.src, msg.seq
 end
 
 function _M.is_resp_recv(msg)
-    return msg.dst == get_worker_id() and msg.type == RESP_MSG, msg.data
+    return msg.dst == get_worker_id() and msg.type == RESP_MSG, msg.seq, msg.data
 end
 
 function _M.is_forward(msg)

@@ -102,10 +102,16 @@ local function client_hello(premature, self, forwarder_id)
     local forwarder_id = forwarder_connection.info.id
     local forwarder_pid = forwarder_connection.info.pid
 
+    local req_send_queue = self._req_send_queues[forwarder_id]
+    if not req_send_queue then
+        req_send_queue = queue.new(self._max_req_send_queue_len)
+        self._req_send_queues[forwarder_id] = req_send_queue
+    end
+
     self._conns[forwarder_id] = forwarder_connection
 
     local read_thread_co = spawn(self.read_thread, self, forwarder_connection)
-    local req_send_thread_co = spawn(self.req_send_thread, self, forwarder_connection)
+    local req_send_thread_co = spawn(self.req_send_thread, self, forwarder_connection, req_send_queue)
 
     log(NOTICE, "client#", LOCAL_WID, " connected to forwarder#", forwarder_id, "(pid: ", forwarder_pid,
         ") and is ready to send/recv messages.")
@@ -164,12 +170,8 @@ end
 
 function _M.init(self, opts)
     local opts = opts or {}
-    for wid = 0, worker_count - 1 do
-        self._req_send_queues = {}
-
-        log(ERR, "-----------xxx", wid)
-        self._req_send_queues[wid] = queue.new(opts.max_req_send_queue_len or 256)
-    end
+    self._max_req_send_queue_len = opts.max_req_send_queue_len or 256
+    self._req_send_queues = {}
     self._waiting_requests = {}
     self._sent_requests = {}
     self._waiting_responses = {}

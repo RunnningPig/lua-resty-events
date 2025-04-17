@@ -2,6 +2,7 @@ local json = require("cjson.safe")
 local connection = require("resty.ipc.connection")
 local utils = require("resty.ipc.utils")
 local message = require("resty.ipc.message")
+local queue = require("resty.ipc.queue")
 
 local get_worker_id = utils.get_worker_id
 local is_closed = utils.is_closed
@@ -60,10 +61,16 @@ function _M.forwarder_hello(self)
         return exit(ngx.ERR)
     end
 
+    local req_send_queue = self._req_send_queues[client_id]
+    if not req_send_queue then
+        req_send_queue = queue.new(self._max_req_send_queue_len)
+        self._req_send_queues[client_id] = req_send_queue
+    end
+
     self._conns[client_id] = client_connection
 
     local read_thread_co = spawn(self.read_thread, self, client_connection)
-    local req_sent_thread_co = spawn(self.req_send_thread, self, client_connection)
+    local req_sent_thread_co = spawn(self.req_send_thread, self, client_connection, req_send_queue)
 
     log(NOTICE, "forwarder#", LOCAL_WID, " connected to client#", client_id, "(pid:", client_pid,
         ") and is ready to send/recv messages.")
