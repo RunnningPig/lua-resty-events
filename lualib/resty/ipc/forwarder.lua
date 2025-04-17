@@ -31,6 +31,12 @@ local _M = {}
 
 
 function _M.forwarder_hello(self)
+    local _req_send_queues = self._req_send_queues
+    if not _req_send_queues then
+        log(ERR, "broker is not (yet) ready to accept connections on worker #", broker_id)
+        return exit(444)
+    end
+
     local client_connection, err = connection.forwarder_hello()
     if exiting() then
         if client_connection then
@@ -49,7 +55,7 @@ function _M.forwarder_hello(self)
     local client_is_forwader = self._forwarders[client_id] and true or false
 
     if client_is_forwader and client_id <= LOCAL_WID then
-        log(ERR, "client#", client_id, "(pid: ", client_pid, ") connection rejected on forwarder#", LOCAL_WID,
+        log(ERR, "client#", client_id, "(pid: )", " connection rejected on forwarder#", LOCAL_WID,
             ": client id less than forwarder id")
         return exit(ngx.ERR)
     end
@@ -57,16 +63,18 @@ function _M.forwarder_hello(self)
     self._conns[client_id] = client_connection
 
     local read_thread_co = spawn(self.read_thread, self, client_connection)
+    local req_sent_thread_co = spawn(self.req_send_thread, self, client_connection)
 
     log(NOTICE, "forwarder#", LOCAL_WID, " connected to client#", client_id, "(pid:", client_pid,
         ") and is ready to send/recv messages.")
 
-    local ok, err = wait(read_thread_co)
+    local ok, err, perr = wait(read_thread_co, req_sent_thread_co)
 
     self._conns[client_id] = nil
 
     if exiting() then
         kill(read_thread_co)
+        kill(req_sent_thread_co)
         return
     end
 
@@ -75,7 +83,13 @@ function _M.forwarder_hello(self)
         return exit(ngx.ERROR)
     end
 
+    if perr and not is_closed(err) then
+        log(ERR, "forwarder#", LOCAL_WID, " disconnected with client#", client_id, "(pid: ", client_pid, "): ", perr)
+        return exit(ngx.ERROR)
+    end
+
     wait(read_thread_co)
+    wait(req_sent_thread_co)
 
     return exit(ngx.OK)
 end
